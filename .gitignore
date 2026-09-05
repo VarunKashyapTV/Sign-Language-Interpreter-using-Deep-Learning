@@ -1,0 +1,28 @@
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Python Cache
+__pycache__/
+*.py[cod]
+*.class
+
+# IDE & OS Files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Heavy datasets and generated pickles
+Code/gestures/
+Code/test_images
+Code/test_labels
+Code/train_images
+Code/train_labels
+Code/val_images
+Code/val_labels
+Code/full_img.jpg
+
+# Old model formats (keeping .keras)
+Code/*.h5
