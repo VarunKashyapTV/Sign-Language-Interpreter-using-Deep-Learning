@@ -26,3 +26,6 @@ Code/full_img.jpg
 
 # Old model formats (keeping .keras)
 Code/*.h5
+
+Code/gestures_mp/
+Code/gestures/
