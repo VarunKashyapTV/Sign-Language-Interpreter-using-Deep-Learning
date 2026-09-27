@@ -2,7 +2,7 @@ import cv2, os
 
 
 def flip_images():
-    gest_folder = "gestures"
+    gest_folder = "gestures_mp"
     images_labels = []
     images = []
     labels = []

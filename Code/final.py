@@ -1,43 +1,45 @@
-import cv2, pickle
+import cv2
 import numpy as np
 import tensorflow as tf
 import os
-import sqlite3, pyttsx3
+import sqlite3
+import pyttsx3
+import mediapipe as mp
 from tensorflow.keras.models import load_model
 from threading import Thread
 
+# 1. Initialize Text-to-Speech Engine
 engine = pyttsx3.init()
-engine.setProperty("rate", 150)
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+engine.setProperty('rate', 150)
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
-# 1. Update model extension to .keras
-model = load_model("cnn_model_keras2.keras")
+# 2. Load Trained Keras Model (mediapipe-trained version, kept separate from the original)
+model = load_model('Code/cnn_model_keras2_mp.keras')
 
-
-def get_hand_hist():
-    with open("hist", "rb") as f:
-        hist = pickle.load(f)
-    return hist
-
+# 3. Initialize MediaPipe Hands
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(
+    static_image_mode=False,
+    max_num_hands=1,
+    min_detection_confidence=0.7,
+    min_tracking_confidence=0.7
+)
+mp_draw = mp.solutions.drawing_utils
 
 def get_image_size():
-    img = cv2.imread("gestures/0/100.jpg", 0)
+    img = cv2.imread('Code/gestures_mp/0/100.jpg', 0)
     if img is None:
         return (50, 50)
     return img.shape
 
-
 image_x, image_y = get_image_size()
-
 
 def keras_process_image(img):
     img = cv2.resize(img, (image_x, image_y))
     img = np.array(img, dtype=np.float32)
-    # 2. CRITICAL FIX: Normalize live camera pixels to match training data
-    img = img / 255.0
+    img = img / 255.0  # Normalize pixel values
     img = np.reshape(img, (1, image_x, image_y, 1))
     return img
-
 
 def keras_predict(model, image):
     processed = keras_process_image(image)
@@ -45,388 +47,146 @@ def keras_predict(model, image):
     pred_class = list(pred_probab).index(max(pred_probab))
     return max(pred_probab), pred_class
 
-
 def get_pred_text_from_db(pred_class):
-    conn = sqlite3.connect("gesture_db.db")
+    conn = sqlite3.connect("Code/gesture_db_mp.db")
     cmd = "SELECT g_name FROM gesture WHERE g_id=" + str(pred_class)
     cursor = conn.execute(cmd)
     for row in cursor:
         return row[0]
+    return ""
 
+def process_hand_crop(crop_img):
+    # Convert crop to grayscale to match training data format
+    gray = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+    
+    # Square padding to maintain aspect ratio
+    h, w = gray.shape
+    if w > h:
+        pad = (w - h) // 2
+        gray = cv2.copyMakeBorder(gray, pad, pad, 0, 0, cv2.BORDER_CONSTANT, value=0)
+    elif h > w:
+        pad = (h - w) // 2
+        gray = cv2.copyMakeBorder(gray, 0, 0, pad, pad, cv2.BORDER_CONSTANT, value=0)
 
-def get_pred_from_contour(contour, thresh):
-    x1, y1, w1, h1 = cv2.boundingRect(contour)
-    save_img = thresh[y1 : y1 + h1, x1 : x1 + w1]
-    text = ""
-    if w1 > h1:
-        save_img = cv2.copyMakeBorder(
-            save_img,
-            int((w1 - h1) / 2),
-            int((w1 - h1) / 2),
-            0,
-            0,
-            cv2.BORDER_CONSTANT,
-            (0, 0, 0),
-        )
-    elif h1 > w1:
-        save_img = cv2.copyMakeBorder(
-            save_img,
-            0,
-            0,
-            int((h1 - w1) / 2),
-            int((h1 - w1) / 2),
-            cv2.BORDER_CONSTANT,
-            (0, 0, 0),
-        )
-    pred_probab, pred_class = keras_predict(model, save_img)
+    pred_probab, pred_class = keras_predict(model, gray)
     if pred_probab * 100 > 70:
-        text = get_pred_text_from_db(pred_class)
-    return text
-
+        return get_pred_text_from_db(pred_class)
+    return ""
 
 def get_operator(pred_text):
     try:
         pred_text = int(pred_text)
     except:
         return ""
-    operator = ""
-    if pred_text == 1:
-        operator = "+"
-    elif pred_text == 2:
-        operator = "-"
-    elif pred_text == 3:
-        operator = "*"
-    elif pred_text == 4:
-        operator = "/"
-    elif pred_text == 5:
-        operator = "%"
-    elif pred_text == 6:
-        operator = "**"
-    elif pred_text == 7:
-        operator = ">>"
-    elif pred_text == 8:
-        operator = "<<"
-    elif pred_text == 9:
-        operator = "&"
-    elif pred_text == 0:
-        operator = "|"
-    return operator
+    operators = {1: "+", 2: "-", 3: "*", 4: "/", 5: "%", 6: "**", 7: ">>", 8: "<<", 9: "&", 0: "|"}
+    return operators.get(pred_text, "")
 
-
-hist = get_hand_hist()
-x, y, w, h = 300, 100, 300, 300
 is_voice_on = True
-
-
-def get_img_contour_thresh(img):
-    img = cv2.flip(img, 1)
-    imgHSV = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    dst = cv2.calcBackProject([imgHSV], [0, 1], hist, [0, 180, 0, 256], 1)
-    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (10, 10))
-    cv2.filter2D(dst, -1, disc, dst)
-    blur = cv2.GaussianBlur(dst, (11, 11), 0)
-    blur = cv2.medianBlur(blur, 15)
-    thresh = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-    thresh = cv2.merge((thresh, thresh, thresh))
-    thresh = cv2.cvtColor(thresh, cv2.COLOR_BGR2GRAY)
-    thresh = thresh[y : y + h, x : x + w]
-    contours = cv2.findContours(thresh.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)[0]
-    return img, contours, thresh
-
 
 def say_text(text):
     if not is_voice_on:
         return
     try:
-        # 3. Windows thread-safety fix for pyttsx3
         import pythoncom
-
         pythoncom.CoInitialize()
     except ImportError:
         pass
-
+        
     while engine._inLoop:
         pass
     engine.say(text)
     engine.runAndWait()
 
+def extract_hand_region(frame):
+    """Detects hand using MediaPipe and returns crop bounding box."""
+    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(img_rgb)
+    
+    h, w, c = frame.shape
+    crop = None
+    bbox = None
 
-def calculator_mode(cam):
-    global is_voice_on
-    flag = {"first": False, "operator": False, "second": False, "clear": False}
-    count_same_frames = 0
-    first, operator, second = "", "", ""
-    pred_text = ""
-    calc_text = ""
-    info = "Enter first number"
-    Thread(target=say_text, args=(info,)).start()
-    count_clear_frames = 0
-    while True:
-        img = cam.read()[1]
-        img = cv2.resize(img, (640, 480))
-        img, contours, thresh = get_img_contour_thresh(img)
-        old_pred_text = pred_text
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            
+            x_max, y_max = 0, 0
+            x_min, y_min = w, h
+            
+            for lm in hand_landmarks.landmark:
+                cx, cy = int(lm.x * w), int(lm.y * h)
+                if cx < x_min: x_min = cx
+                if cx > x_max: x_max = cx
+                if cy < y_min: y_min = cy
+                if cy > y_max: y_max = cy
 
-        if len(contours) > 0:
-            contour = max(contours, key=cv2.contourArea)
-            if cv2.contourArea(contour) > 10000:
-                pred_text = get_pred_from_contour(contour, thresh)
-                if old_pred_text == pred_text:
-                    count_same_frames += 1
-                else:
-                    count_same_frames = 0
+            # Add margin around bounding box
+            margin = 30
+            x_min = max(0, x_min - margin)
+            y_min = max(0, y_min - margin)
+            x_max = min(w, x_max + margin)
+            y_max = min(h, y_max + margin)
 
-                if pred_text == "C":
-                    if count_same_frames > 5:
-                        count_same_frames = 0
-                        first, second, operator, pred_text, calc_text = (
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                        )
-                        (
-                            flag["first"],
-                            flag["operator"],
-                            flag["second"],
-                            flag["clear"],
-                        ) = (False, False, False, False)
-                        info = "Enter first number"
-                        Thread(target=say_text, args=(info,)).start()
-
-                elif pred_text == "Best of Luck " and count_same_frames > 15:
-                    count_same_frames = 0
-                    if flag["clear"]:
-                        first, second, operator, pred_text, calc_text = (
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                        )
-                        (
-                            flag["first"],
-                            flag["operator"],
-                            flag["second"],
-                            flag["clear"],
-                        ) = (False, False, False, False)
-                        info = "Enter first number"
-                        Thread(target=say_text, args=(info,)).start()
-                    elif second != "":
-                        flag["second"] = True
-                        info = "Clear screen"
-                        second = ""
-                        flag["clear"] = True
-                        try:
-                            calc_text += "= " + str(eval(calc_text))
-                        except:
-                            calc_text = "Invalid operation"
-                        if is_voice_on:
-                            speech = (
-                                calc_text.replace("-", " minus ")
-                                .replace("/", " divided by ")
-                                .replace("**", " raised to the power ")
-                                .replace("*", " multiplied by ")
-                                .replace("%", " mod ")
-                                .replace(">>", " bitwise right shift ")
-                                .replace("<<", " bitwise left shift ")
-                                .replace("&", " bitwise and ")
-                                .replace("|", " bitwise or ")
-                            )
-                            Thread(target=say_text, args=(speech,)).start()
-                    elif first != "":
-                        flag["first"] = True
-                        info = "Enter operator"
-                        Thread(target=say_text, args=(info,)).start()
-                        first = ""
-
-                elif pred_text != "Best of Luck " and (
-                    isinstance(pred_text, str) and pred_text.isnumeric()
-                ):
-                    if flag["first"] == False:
-                        if count_same_frames > 15:
-                            count_same_frames = 0
-                            Thread(target=say_text, args=(pred_text,)).start()
-                            first += pred_text
-                            calc_text += pred_text
-                    elif flag["operator"] == False:
-                        operator = get_operator(pred_text)
-                        if count_same_frames > 15:
-                            count_same_frames = 0
-                            flag["operator"] = True
-                            calc_text += operator
-                            info = "Enter second number"
-                            Thread(target=say_text, args=(info,)).start()
-                            operator = ""
-                    elif flag["second"] == False:
-                        if count_same_frames > 15:
-                            Thread(target=say_text, args=(pred_text,)).start()
-                            second += pred_text
-                            calc_text += pred_text
-                            count_same_frames = 0
-
-        if count_clear_frames == 30:
-            first, second, operator, pred_text, calc_text = "", "", "", "", ""
-            flag["first"], flag["operator"], flag["second"], flag["clear"] = (
-                False,
-                False,
-                False,
-                False,
-            )
-            info = "Enter first number"
-            Thread(target=say_text, args=(info,)).start()
-            count_clear_frames = 0
-
-        blackboard = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(
-            blackboard,
-            "Calculator Mode",
-            (100, 50),
-            cv2.FONT_HERSHEY_TRIPLEX,
-            1.5,
-            (255, 0, 0),
-        )
-        cv2.putText(
-            blackboard,
-            "Predicted text- " + str(pred_text),
-            (30, 100),
-            cv2.FONT_HERSHEY_TRIPLEX,
-            1,
-            (255, 255, 0),
-        )
-        cv2.putText(
-            blackboard,
-            "Operator " + operator,
-            (30, 140),
-            cv2.FONT_HERSHEY_TRIPLEX,
-            1,
-            (255, 255, 127),
-        )
-        cv2.putText(
-            blackboard,
-            calc_text,
-            (30, 240),
-            cv2.FONT_HERSHEY_TRIPLEX,
-            2,
-            (255, 255, 255),
-        )
-        cv2.putText(
-            blackboard, info, (30, 440), cv2.FONT_HERSHEY_TRIPLEX, 1, (0, 255, 255)
-        )
-
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        res = np.hstack((img, blackboard))
-        cv2.imshow("Recognizing gesture", res)
-        cv2.imshow("thresh", thresh)
-        keypress = cv2.waitKey(1)
-        if keypress == ord("q") or keypress == ord("t"):
+            if (x_max - x_min) > 20 and (y_max - y_min) > 20:
+                crop = frame[y_min:y_max, x_min:x_max]
+                bbox = (x_min, y_min, x_max, y_max)
             break
-        if keypress == ord("v"):
-            is_voice_on = not is_voice_on
 
-    if keypress == ord("t"):
-        return 1
-    else:
-        return 0
-
+    return frame, crop, bbox
 
 def text_mode(cam):
     global is_voice_on
     text = ""
     word = ""
     count_same_frame = 0
+
     while True:
-        img = cam.read()[1]
-        img = cv2.resize(img, (640, 480))
-        img, contours, thresh = get_img_contour_thresh(img)
+        ret, frame = cam.read()
+        if not ret: break
+        
+        frame = cv2.flip(frame, 1)
+        frame = cv2.resize(frame, (640, 480))
+        frame, hand_crop, bbox = extract_hand_region(frame)
+        
         old_text = text
+        if hand_crop is not None:
+            text = process_hand_crop(hand_crop)
+            if old_text == text and text != "":
+                count_same_frame += 1
+            else:
+                count_same_frame = 0
 
-        if len(contours) > 0:
-            contour = max(contours, key=cv2.contourArea)
-            if cv2.contourArea(contour) > 10000:
-                text = get_pred_from_contour(contour, thresh)
-                if old_text == text:
-                    count_same_frame += 1
-                else:
-                    count_same_frame = 0
+            if count_same_frame > 10:  # Faster detection threshold
+                if len(text) == 1:
+                    Thread(target=say_text, args=(text,)).start()
+                word += text
+                count_same_frame = 0
 
-                if count_same_frame > 20:
-                    if len(text) == 1:
-                        Thread(target=say_text, args=(text,)).start()
-                    word = word + text
-                    if word.startswith("I/Me "):
-                        word = word.replace("I/Me ", "I ")
-                    elif word.endswith("I/Me "):
-                        word = word.replace("I/Me ", "me ")
-                    count_same_frame = 0
-
-            elif cv2.contourArea(contour) < 1000:
-                if word != "":
-                    Thread(target=say_text, args=(word,)).start()
-                text = ""
-                word = ""
-        else:
-            if word != "":
-                Thread(target=say_text, args=(word,)).start()
-            text = ""
-            word = ""
+            # Draw green box around detected hand
+            if bbox:
+                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
 
         blackboard = np.zeros((480, 640, 3), dtype=np.uint8)
-        cv2.putText(
-            blackboard,
-            "Text Mode",
-            (180, 50),
-            cv2.FONT_HERSHEY_TRIPLEX,
-            1.5,
-            (255, 0, 0),
-        )
-        cv2.putText(
-            blackboard,
-            "Predicted text- " + str(text),
-            (30, 100),
-            cv2.FONT_HERSHEY_TRIPLEX,
-            1,
-            (255, 255, 0),
-        )
-        cv2.putText(
-            blackboard, word, (30, 240), cv2.FONT_HERSHEY_TRIPLEX, 2, (255, 255, 255)
-        )
+        cv2.putText(blackboard, "Text Mode (MediaPipe)", (120, 50), cv2.FONT_HERSHEY_TRIPLEX, 1.2, (255, 0, 0))
+        cv2.putText(blackboard, "Predicted text: " + str(text), (30, 100), cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 255, 0))
+        cv2.putText(blackboard, word, (30, 240), cv2.FONT_HERSHEY_TRIPLEX, 1.8, (255, 255, 255))
 
-        cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
-        res = np.hstack((img, blackboard))
+        res = np.hstack((frame, blackboard))
         cv2.imshow("Recognizing gesture", res)
-        cv2.imshow("thresh", thresh)
+
         keypress = cv2.waitKey(1)
-        if keypress == ord("q") or keypress == ord("c"):
+        if keypress == ord('q'):
             break
-        if keypress == ord("v"):
+        elif keypress == ord('v'):
             is_voice_on = not is_voice_on
 
-    if keypress == ord("c"):
-        return 2
-    else:
-        return 0
-
+    return 0
 
 def recognize():
-    cam = cv2.VideoCapture(1)
-    if cam.read()[0] == False:
-        cam = cv2.VideoCapture(0)
-
-    keypress = 1
-    while True:
-        if keypress == 1:
-            keypress = text_mode(cam)
-        elif keypress == 2:
-            keypress = calculator_mode(cam)
-        else:
-            break
-
+    cam = cv2.VideoCapture(0)
+    text_mode(cam)
     cam.release()
     cv2.destroyAllWindows()
 
-
-# Warm up model to prevent initial lag
-keras_predict(model, np.zeros((image_x, image_y), dtype=np.uint8))
-recognize()
+if __name__ == "__main__":
+    recognize()

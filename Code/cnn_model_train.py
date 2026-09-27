@@ -17,7 +17,7 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
 
 def get_image_size():
-    img_path = os.path.join("gestures", "1", "100.jpg")
+    img_path = os.path.join("gestures_mp", "1", "100.jpg")
     img = cv2.imread(img_path, 0)
     if img is None:
         return (50, 50)
@@ -53,7 +53,8 @@ def cnn_model(num_of_classes):
     )
 
     # Native .keras format recommended for current TensorFlow/Keras versions
-    filepath = "cnn_model_keras2.keras"
+    # Kept as a separate filename from the original so the histogram-trained model is untouched
+    filepath = "cnn_model_keras2_mp.keras"
     checkpoint = ModelCheckpoint(
         filepath, monitor="val_accuracy", verbose=1, save_best_only=True, mode="max"
     )
@@ -62,14 +63,14 @@ def cnn_model(num_of_classes):
 
 
 def train():
-    with open("train_images", "rb") as f:
+    with open("train_images_mp", "rb") as f:
         train_images = np.array(pickle.load(f), dtype=np.float32)
-    with open("train_labels", "rb") as f:
+    with open("train_labels_mp", "rb") as f:
         train_labels = np.array(pickle.load(f), dtype=np.int32)
 
-    with open("val_images", "rb") as f:
+    with open("val_images_mp", "rb") as f:
         val_images = np.array(pickle.load(f), dtype=np.float32)
-    with open("val_labels", "rb") as f:
+    with open("val_labels_mp", "rb") as f:
         val_labels = np.array(pickle.load(f), dtype=np.int32)
 
     # 1. Normalize pixels from [0, 255] to [0.0, 1.0]

@@ -11,11 +11,11 @@ def get_image_size():
 
 # Determine absolute path to the 'gestures' directory
 script_dir = os.path.dirname(os.path.abspath(__file__))
-gestures_dir = os.path.join(script_dir, "gestures")
+gestures_dir = os.path.join(script_dir, "gestures_mp")
 
 # Fallback if gestures folder is located in parent directory
 if not os.path.exists(gestures_dir):
-    gestures_dir = os.path.join(script_dir, "..", "gestures")
+    gestures_dir = os.path.join(script_dir, "..", "gestures_mp")
 
 if not os.path.exists(gestures_dir):
     raise FileNotFoundError(f"Could not locate 'gestures' folder near: {script_dir}")
