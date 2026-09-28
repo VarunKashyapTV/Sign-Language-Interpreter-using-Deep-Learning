@@ -1,61 +1,52 @@
-import cv2
-from glob import glob
 import numpy as np
-import random
+import os
+from glob import glob
 from sklearn.utils import shuffle
 import pickle
-import os
 
 
-def pickle_images_labels():
-    images_labels = []
-    images = glob("gestures_mp/*/*.jpg")
-    images.sort()
-    for image in images:
-        print(image)
-        label = image[image.find(os.sep) + 1 : image.rfind(os.sep)]
-        img = cv2.imread(image, 0)
-        images_labels.append((np.array(img, dtype=np.uint8), int(label)))
-    return images_labels
+def load_all_sequences():
+    files = sorted(glob("gestures_mp/*.npy"))
+    if not files:
+        raise FileNotFoundError("No gesture .npy files found in gestures_mp/")
+
+    all_sequences = []
+    all_labels = []
+    for f in files:
+        g_id = int(os.path.splitext(os.path.basename(f))[0])
+        seqs = np.load(f)  # shape (N, SEQ_LEN, 63)
+        all_sequences.append(seqs)
+        all_labels.extend([g_id] * len(seqs))
+        print(f"Loaded {len(seqs)} sequences for gesture {g_id}")
+
+    sequences = np.concatenate(all_sequences, axis=0)
+    labels = np.array(all_labels)
+    return sequences, labels
 
 
-images_labels = pickle_images_labels()
-images_labels = shuffle(shuffle(shuffle(shuffle(images_labels))))
-images, labels = zip(*images_labels)
-print("Length of images_labels", len(images_labels))
+sequences, labels = load_all_sequences()
+sequences, labels = shuffle(sequences, labels)
+print("Total sequences:", len(sequences))
 
-train_images = images[: int(5 / 6 * len(images))]
-print("Length of train_images", len(train_images))
-with open("train_images_mp", "wb") as f:
-    pickle.dump(train_images, f)
-del train_images
+n = len(sequences)
+train_end = int(5 / 6 * n)
+test_end = int(11 / 12 * n)
 
-train_labels = labels[: int(5 / 6 * len(labels))]
-print("Length of train_labels", len(train_labels))
+train_sequences, train_labels = sequences[:train_end], labels[:train_end]
+test_sequences, test_labels = sequences[train_end:test_end], labels[train_end:test_end]
+val_sequences, val_labels = sequences[test_end:], labels[test_end:]
+
+print("Train:", len(train_sequences), "Test:", len(test_sequences), "Val:", len(val_sequences))
+
+with open("train_sequences_mp", "wb") as f:
+    pickle.dump(train_sequences, f)
 with open("train_labels_mp", "wb") as f:
     pickle.dump(train_labels, f)
-del train_labels
-
-test_images = images[int(5 / 6 * len(images)) : int(11 / 12 * len(images))]
-print("Length of test_images", len(test_images))
-with open("test_images_mp", "wb") as f:
-    pickle.dump(test_images, f)
-del test_images
-
-test_labels = labels[int(5 / 6 * len(labels)) : int(11 / 12 * len(images))]
-print("Length of test_labels", len(test_labels))
+with open("test_sequences_mp", "wb") as f:
+    pickle.dump(test_sequences, f)
 with open("test_labels_mp", "wb") as f:
     pickle.dump(test_labels, f)
-del test_labels
-
-val_images = images[int(11 / 12 * len(images)) :]
-print("Length of test_images", len(val_images))
-with open("val_images_mp", "wb") as f:
-    pickle.dump(val_images, f)
-del val_images
-
-val_labels = labels[int(11 / 12 * len(labels)) :]
-print("Length of val_labels", len(val_labels))
+with open("val_sequences_mp", "wb") as f:
+    pickle.dump(val_sequences, f)
 with open("val_labels_mp", "wb") as f:
     pickle.dump(val_labels, f)
-del val_labels
