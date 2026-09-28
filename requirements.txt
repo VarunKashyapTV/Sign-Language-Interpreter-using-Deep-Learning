@@ -1,0 +1,7 @@
+numpy<2
+mediapipe==0.10.14
+tensorflow==2.16.1
+opencv-python
+pyttsx3
+h5py
+scikit-learn

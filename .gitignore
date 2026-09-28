@@ -29,3 +29,14 @@ Code/*.h5
 
 Code/gestures_mp/
 Code/gestures/
+# captured data, generated datasets, trained models
+gestures_mp/
+gestures/
+*.npy
+train_*_mp
+test_*_mp
+val_*_mp
+*.keras
+*.h5
+*.db
+full_img.jpg
