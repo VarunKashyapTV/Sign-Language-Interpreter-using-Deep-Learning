@@ -1,75 +1,42 @@
-import cv2
-import numpy as np
-import tensorflow as tf
 import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+
 import sqlite3
-import pyttsx3
-import mediapipe as mp
 from collections import deque
-from tensorflow.keras.models import load_model
 from threading import Thread
 
+import cv2
+import numpy as np
+import pyttsx3
+from tensorflow.keras.models import load_model
+
+from hand_features import SEQ_LEN, FEATURES, build_features, extract_features
+
+BASE = os.path.dirname(os.path.abspath(__file__))     # works from any folder
+PRED_STRIDE = 5          # predict every N frames once the buffer is full
+CONF_THRESHOLD = 0.70    # accept a prediction only above this confidence
+HAND_GONE_FRAMES = 15    # after this many frames without a hand, the same word may be spoken again
+
 engine = pyttsx3.init()
-engine.setProperty('rate', 150)
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+engine.setProperty("rate", 150)
 
-model = load_model('Code/gesture_lstm_mp.keras')
-
-mp_hands = mp.solutions.hands
-hands = mp_hands.Hands(
-    static_image_mode=False,
-    max_num_hands=1,
-    min_detection_confidence=0.7,
-    min_tracking_confidence=0.7
-)
-mp_draw = mp.solutions.drawing_utils
-
-SEQ_LEN = 30
-PRED_STRIDE = 5       # run a prediction every N frames once the buffer is full
-CONF_THRESHOLD = 0.70
-
-
-def extract_landmarks(frame):
-    """Same normalization as create_gestures.py — wrist-relative, scale-normalized."""
-    img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(img_rgb)
-
-    if not results.multi_hand_landmarks:
-        return frame, None, None
-
-    hand_landmarks = results.multi_hand_landmarks[0]
-    mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-
-    h, w, c = frame.shape
-    xs = [lm.x * w for lm in hand_landmarks.landmark]
-    ys = [lm.y * h for lm in hand_landmarks.landmark]
-    bbox = (
-        max(0, int(min(xs)) - 30), max(0, int(min(ys)) - 30),
-        min(w, int(max(xs)) + 30), min(h, int(max(ys)) + 30),
+model = load_model(os.path.join(BASE, "gesture_lstm_mp.keras"))
+if tuple(model.input_shape[1:]) != (SEQ_LEN, FEATURES):
+    raise SystemExit(
+        f"The saved model expects input {tuple(model.input_shape[1:])} but the code now produces "
+        f"({SEQ_LEN}, {FEATURES}). Recapture the gestures and retrain the model."
     )
-
-    pts = np.array(
-        [[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark], dtype=np.float32
-    )
-    wrist = pts[0].copy()
-    pts -= wrist
-    scale = np.max(np.linalg.norm(pts, axis=1))
-    if scale > 1e-6:
-        pts /= scale
-
-    return frame, pts.flatten(), bbox
 
 
 def get_pred_text_from_db(pred_class):
-    conn = sqlite3.connect("Code/gesture_db.db")
-    cmd = "SELECT g_name FROM gesture WHERE g_id=" + str(pred_class)
-    cursor = conn.execute(cmd)
-    for row in cursor:
-        return row[0]
-    return ""
+    conn = sqlite3.connect(os.path.join(BASE, "gesture_db.db"))
+    row = conn.execute("SELECT g_name FROM gesture WHERE g_id=?", (int(pred_class),)).fetchone()
+    conn.close()
+    return row[0] if row else ""
 
 
 is_voice_on = True
+
 
 def say_text(text):
     if not is_voice_on:
@@ -93,6 +60,7 @@ def text_mode(cam):
     word = ""
     frame_count = 0
     last_spoken = ""
+    missing = 0
 
     while True:
         ret, frame = cam.read()
@@ -101,18 +69,22 @@ def text_mode(cam):
 
         frame = cv2.flip(frame, 1)
         frame = cv2.resize(frame, (640, 480))
-        frame, landmarks, bbox = extract_landmarks(frame)
+        frame, found = extract_features(frame)
 
-        if landmarks is not None:
-            buffer.append(landmarks)
-            if bbox:
-                cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
+        vec = build_features(found)
+        if vec is not None:
+            buffer.append(vec)
+            missing = 0
         else:
             buffer.clear()
+            missing += 1
+            if missing > HAND_GONE_FRAMES:
+                last_spoken = ""
+                text = ""
 
         frame_count += 1
         if len(buffer) == SEQ_LEN and frame_count % PRED_STRIDE == 0:
-            seq = np.expand_dims(np.array(buffer), axis=0)  # shape (1, SEQ_LEN, 63)
+            seq = np.expand_dims(np.array(buffer, dtype=np.float32), axis=0)   # (1, SEQ_LEN, FEATURES)
             pred_probab = model.predict(seq, verbose=0)[0]
             pred_class = int(np.argmax(pred_probab))
             confidence = float(np.max(pred_probab))
@@ -130,15 +102,15 @@ def text_mode(cam):
         blackboard = np.zeros((480, 640, 3), dtype=np.uint8)
         cv2.putText(blackboard, "Text Mode (MediaPipe + LSTM)", (60, 50), cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 0, 0))
         cv2.putText(blackboard, "Predicted: " + str(text), (30, 100), cv2.FONT_HERSHEY_TRIPLEX, 1, (255, 255, 0))
+        cv2.putText(blackboard, f"Hands in view: {len(found)}", (30, 140), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 1)
         cv2.putText(blackboard, word, (30, 240), cv2.FONT_HERSHEY_TRIPLEX, 1.5, (255, 255, 255))
 
-        res = np.hstack((frame, blackboard))
-        cv2.imshow("Recognizing gesture", res)
+        cv2.imshow("Recognizing gesture", np.hstack((frame, blackboard)))
 
         keypress = cv2.waitKey(1)
-        if keypress == ord('q'):
+        if keypress == ord("q"):
             break
-        elif keypress == ord('v'):
+        elif keypress == ord("v"):
             is_voice_on = not is_voice_on
 
     return 0

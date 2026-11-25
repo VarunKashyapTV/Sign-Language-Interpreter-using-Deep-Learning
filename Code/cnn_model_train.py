@@ -1,8 +1,9 @@
 import os
-import pickle
-import numpy as np
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-import tensorflow as tf
+import pickle
+
+import numpy as np
 from tensorflow.keras import optimizers
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Input, LSTM, Dense, Dropout
@@ -10,15 +11,12 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import ModelCheckpoint
 from tensorflow.keras import backend as K
 
-os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
-
-SEQ_LEN = 30
-FEATURES = 63  # 21 landmarks x 3 (x, y, z)
+MODEL_FILE = "gesture_lstm_mp.keras"
 
 
-def lstm_model(num_of_classes):
+def lstm_model(num_of_classes, seq_len, features):
     model = Sequential()
-    model.add(Input(shape=(SEQ_LEN, FEATURES)))
+    model.add(Input(shape=(seq_len, features)))
     model.add(LSTM(64, return_sequences=True))
     model.add(Dropout(0.3))
     model.add(LSTM(64))
@@ -31,10 +29,8 @@ def lstm_model(num_of_classes):
         optimizer=optimizers.Adam(learning_rate=0.001),
         metrics=["accuracy"],
     )
-
-    filepath = "gesture_lstm_mp.keras"
     checkpoint = ModelCheckpoint(
-        filepath, monitor="val_accuracy", verbose=1, save_best_only=True, mode="max"
+        MODEL_FILE, monitor="val_accuracy", verbose=1, save_best_only=True, mode="max"
     )
     return model, [checkpoint]
 
@@ -44,31 +40,34 @@ def train():
         train_sequences = np.array(pickle.load(f), dtype=np.float32)
     with open("train_labels_mp", "rb") as f:
         train_labels = np.array(pickle.load(f), dtype=np.int32)
-
     with open("val_sequences_mp", "rb") as f:
         val_sequences = np.array(pickle.load(f), dtype=np.float32)
     with open("val_labels_mp", "rb") as f:
         val_labels = np.array(pickle.load(f), dtype=np.int32)
 
-    train_labels_cat = to_categorical(train_labels)
-    val_labels_cat = to_categorical(val_labels)
+    seq_len, features = train_sequences.shape[1], train_sequences.shape[2]
+    print(f"Sequences: {train_sequences.shape[0]} train, {val_sequences.shape[0]} validation; "
+          f"each {seq_len} frames x {features} features")
 
-    num_of_classes = train_labels_cat.shape[1]
+    # same class count for both splits, even if one split happens to miss the highest ID
+    num_of_classes = int(max(train_labels.max(), val_labels.max())) + 1
     print(f"Dataset target classes count: {num_of_classes}")
+    train_labels = to_categorical(train_labels, num_of_classes)
+    val_labels = to_categorical(val_labels, num_of_classes)
 
-    model, callbacks_list = lstm_model(num_of_classes)
+    model, callbacks_list = lstm_model(num_of_classes, seq_len, features)
     model.summary()
 
     model.fit(
         train_sequences,
-        train_labels_cat,
-        validation_data=(val_sequences, val_labels_cat),
+        train_labels,
+        validation_data=(val_sequences, val_labels),
         epochs=30,
         batch_size=32,
         callbacks=callbacks_list,
     )
 
-    scores = model.evaluate(val_sequences, val_labels_cat, verbose=0)
+    scores = model.evaluate(val_sequences, val_labels, verbose=0)
     print("LSTM Accuracy: %.2f%%" % (scores[1] * 100))
 
 
